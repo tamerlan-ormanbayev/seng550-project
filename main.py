@@ -1,6 +1,6 @@
 #Importing PySpark Libraries
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit, when, mean
+from pyspark.sql.functions import col, lit, when, mean, regexp_extract, regexp_replace, trim, to_date
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.feature import VectorAssembler
@@ -18,6 +18,14 @@ cols = ['Date', 'Time', 'CO_Winetavern', '8hr_Winetavern', 'Flag_Winetavern', 'C
 #Creating a DataFrame from the raw data
 df = spark.read.csv(no_header, header=False, inferSchema=True)
 df = df.toDF(*cols)
+
+#Data Clean Up - Parsing the CSV file's data correctly
+df = df.withColumn("Date", regexp_extract(col("Date"), r"(\d{2}/\d{2}/\d{4})", 1)) \
+       .withColumn("Date", to_date(col("Date"), "dd/MM/yyyy")) \
+       .withColumn("Comment_Winetavern", trim(regexp_replace(col("Comment_Winetavern"), r"[')]", ""))) \
+       .withColumn("Comment_Winetavern", when(col("Comment_Winetavern").isNull(), "").otherwise(col("Comment_Winetavern"))) \
+       .withColumn("Comment_Coleraine", trim(regexp_replace(col("Comment_Coleraine"), r"[')]", ""))) \
+       .withColumn("Comment_Coleraine", when(col("Comment_Coleraine").isNull(), "").otherwise(col("Comment_Coleraine")))
 
 #Handles Invalid values such as #DIV/0! by replacing them with None      
 df = df.withColumn("CO_Winetavern", when(col("CO_Winetavern") == "#DIV/0!", lit(None)).otherwise(col("CO_Winetavern").cast('double'))) \
@@ -125,7 +133,8 @@ predictions_w.groupBy("classification_winetavern", "prediction").count().show()
 print("Confusion Matrix for Coleraine Street:")
 predictions_c.groupBy("classification_coleraine", "prediction").count().show()
 
-
+# Get the first row
+print(df.limit(1).collect()[0])
 
 
 
