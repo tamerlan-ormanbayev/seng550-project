@@ -1,3 +1,6 @@
+#Importing Pandas
+import pandas as pd
+
 #Importing PySpark Libraries
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, when, mean, regexp_extract, regexp_replace, trim, to_date
@@ -10,7 +13,7 @@ spark = SparkSession.builder.appName('CO_Data').getOrCreate()
 
 #Reading the dataset
 raw_data = spark.read.text('dublin-city-council-co-2011p20110929-1048.csv')
-no_header = raw_data.rdd.zipWithIndex().filter(lambda x: x[1] >= 7).map(lambda x: x[0])
+no_header = raw_data.rdd.zipWithIndex().filter(lambda x: 7 <= x[1] <= 3646).map(lambda x: x[0])
 
 #Naming the columns so it is clear that a set of features belong to Winetavern Street Site and another set belong to Coleraine Street
 cols = ['Date', 'Time', 'CO_Winetavern', '8hr_Winetavern', 'Flag_Winetavern', 'Comment_Winetavern', 'CO_Coleraine', '8hr_Coleraine', 'Flag_Coleraine', 'Comment_Coleraine']
@@ -132,9 +135,3 @@ predictions_w.groupBy("classification_winetavern", "prediction").count().show()
 
 print("Confusion Matrix for Coleraine Street:")
 predictions_c.groupBy("classification_coleraine", "prediction").count().show()
-
-# Get the first row
-print(df.limit(1).collect()[0])
-
-
-
