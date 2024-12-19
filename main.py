@@ -1,7 +1,7 @@
 #Importing PySpark Libraries
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, lit, when, mean
-from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
 from pyspark.ml.classification import RandomForestClassifier
 from pyspark.ml.feature import VectorAssembler
 
@@ -30,7 +30,7 @@ df = df.withColumn("Flag_Winetavern", col("Flag_Winetavern").cast('int')) \
        .withColumn("Flag_Coleraine", col("Flag_Coleraine").cast('int'))
 
 # Verify the schema has the correct data types
-df.printSchema()
+#df.printSchema()
 
 #Preprocessing the data (Replacing/Handling missing values)
 #Finding the mean for the CO levels in both sites
@@ -42,45 +42,90 @@ df = df.na.fill({'CO_Winetavern': mean_CO_Winetavern, 'CO_Coleraine': mean_CO_Co
 #Drop rows where all columns are empty, just in case.
 df = df.na.fill(0)  # Fill all null values with 0
 
+#Adding target columns for each site based on the 8hr rolling average range
+df = df.withColumn(
+    "classification_winetavern",
+    when(col("8hr_Winetavern") <= 0.2, 0)  #0 represents Low 
+    .when(col("8hr_Winetavern") <= 0.4, 1) #1 represents Moderate
+    .when(col("8hr_Winetavern") <= 0.6, 2) #2 represents High
+    .otherwise(3)  #3 represents High
+)
 
-#Building the Random Forest Classifier Model using only numerical features
+df = df.withColumn(
+    "classification_coleraine",
+    when(col("8hr_Coleraine") <= 0.2, 0)  #0 represents Low 
+    .when(col("8hr_Coleraine") <= 0.4, 1) #1 represents Moderate
+    .when(col("8hr_Coleraine") <= 0.6, 2) #2 represents High
+    .otherwise(3)  #3 represents High
+)
+
+#Building Two Random Forest Classifiers for Winetavern Street and Coleraine Street respectively
 assembler = VectorAssembler(inputCols=['CO_Winetavern', '8hr_Winetavern', 'Flag_Winetavern', 'CO_Coleraine', '8hr_Coleraine', 'Flag_Coleraine'], outputCol="features")
 df = assembler.transform(df)
-
-df = df.withColumn("exceeds_threshold", when((col("8hr_Winetavern") > 10) | (col("8hr_Coleraine") > 10), 1).otherwise(0))
 train_data, test_data = df.randomSplit([0.8, 0.2], seed=42)
 
-rfc = RandomForestClassifier(featuresCol="features", labelCol="exceeds_threshold", numTrees=100)
-rfc_model = rfc.fit(train_data)
+rfc_w = RandomForestClassifier(featuresCol="features", labelCol="classification_winetavern", numTrees=100)
+rfc_model_w = rfc_w.fit(train_data)
 
-#Perform Predictions on the test data
-predictions = rfc_model.transform(test_data)
+rfc_c = RandomForestClassifier(featuresCol="features", labelCol="classification_coleraine", numTrees=100)
+rfc_model_c = rfc_c.fit(train_data)
 
-#Evaluate the model using the test data
-auc_eval = BinaryClassificationEvaluator(labelCol="exceeds_threshold", rawPredictionCol="prediction", metricName="areaUnderROC")
-a_eval = MulticlassClassificationEvaluator(labelCol="exceeds_threshold", predictionCol="prediction", metricName="accuracy")
-p_eval= MulticlassClassificationEvaluator(labelCol="exceeds_threshold", predictionCol="prediction", metricName="weightedPrecision")
-r_eval= MulticlassClassificationEvaluator(labelCol="exceeds_threshold", predictionCol="prediction", metricName="weightedRecall")
-f1_eval = MulticlassClassificationEvaluator(labelCol="exceeds_threshold", predictionCol="prediction", metricName="f1")
+#Make Predictions on each site separately
+predictions_w = rfc_model_w.transform(test_data)
+predictions_c = rfc_model_c.transform(test_data)
 
-auc_roc = auc_eval.evaluate(predictions)
-accuracy = a_eval.evaluate(predictions)
-precision = p_eval.evaluate(predictions)
-recall = r_eval.evaluate(predictions)
-f1_score = f1_eval.evaluate(predictions)
+#Create Evalutor Model to Measure the model's ability to predict
+eval = MulticlassClassificationEvaluator(predictionCol="prediction")
+
+#Evaluate both models using the test data
+acc_wine = eval.setMetricName("accuracy").setLabelCol("classification_winetavern").evaluate(predictions_w)
+prec_wine = eval.setMetricName("weightedPrecision").setLabelCol("classification_winetavern").evaluate(predictions_w)
+recall_wine = eval.setMetricName("weightedRecall").setLabelCol("classification_winetavern").evaluate(predictions_w)
+f1_wine = eval.setMetricName("f1").setLabelCol("classification_winetavern").evaluate(predictions_w)
+
+acc_col = eval.setMetricName("accuracy").setLabelCol("classification_coleraine").evaluate(predictions_c)
+prec_col = eval.setMetricName("weightedPrecision").setLabelCol("classification_coleraine").evaluate(predictions_c)
+recall_col = eval.setMetricName("weightedRecall").setLabelCol("classification_coleraine").evaluate(predictions_c)
+f1_col = eval.setMetricName("f1").setLabelCol("classification_coleraine").evaluate(predictions_c)
+
+#Finding Training Accuracy and Training Error for Winetavern Street and Coleraine Street
+train_predictions_w = rfc_model_w.transform(train_data)
+train_accuracy_w = eval.setMetricName("accuracy").setLabelCol("classification_winetavern").evaluate(train_predictions_w)
+train_error_w = 1 - train_accuracy_w
+
+train_predictions_c = rfc_model_c.transform(train_data)
+train_accuracy_c = eval.setMetricName("accuracy").setLabelCol("classification_coleraine").evaluate(train_predictions_c)
+train_error_c = 1 - train_accuracy_c
 
 #Display the evaluation metrics
-print("Area Under ROC: ", auc_roc)
-print("Accuracy: ", accuracy)
-print("Precision: ", precision)
-print("Recall: ", recall)
-print("F1 Score: ", f1_score)
+print("\nEvaluation Metrics")
+print("Winetavern Street - Accuracy: ", acc_wine)
+print("Winetavern Street - Precision: ", prec_wine)
+print("Winetavern Street - Recall: ", recall_wine)
+print("Winetavern Street - F1 Score: ", f1_wine)
+
+print("Winetavern Street - Training Accuracy: ", train_accuracy_w)
+print("Winetavern Street - Training Error: ", train_error_w)
+print() #Just to add some space
+
+print("Coleraine Street - Accuracy: ", acc_col)
+print("Coleraine Street - Precision: ", prec_col)
+print("Coleraine Street - Recall: ", recall_col)
+print("Coleraine Street - F1 Score: ", f1_col)
+
+print("Coleraine Street - Training Accuracy: ", train_accuracy_c)
+print("Coleraine Street - Training Error: ", train_error_c)
+print() #Just to add some space
 
 
-#Finding Training Error
-train_predictions = rfc_model.transform(train_data)
-train_error = 1.0 - a_eval.evaluate(train_predictions)
-print("Training Error: ", train_error)
+#Display Confusion Matrix
+print("Confusion Matrix for Winetavern Street:")
+predictions_w.groupBy("classification_winetavern", "prediction").count().show()
+
+print("Confusion Matrix for Coleraine Street:")
+predictions_c.groupBy("classification_coleraine", "prediction").count().show()
+
+
 
 
 
